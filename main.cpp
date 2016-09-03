@@ -96,7 +96,10 @@ int main(int argc, char *argv[])
     // Setup QT's main window and label
     QApplication a(argc, argv);
     QLabel l;
-    
+
+    // Show window and loading message in console
+    a.processEvents();
+    qDebug("Loading...");
 
     l.setAlignment(Qt::AlignCenter);
     l.setFixedSize(windowWidth,windowHeight);
@@ -123,14 +126,14 @@ int main(int argc, char *argv[])
             splitString = split(lineInput, ' ');
             if(splitString[0] == "Seq") {
                 testSequence.push_back(splitString[2]);
-                qDebug(splitString[2].c_str());
+                //qDebug(splitString[2].c_str());
             }
 
             getline(readFile, lineInput);
             splitString = split(lineInput, ' ');
             if(splitString[0] == "Fitness") {
                 testFitness.push_back(stoi(splitString[2]));
-                qDebug(splitString[2].c_str());
+                //qDebug(splitString[2].c_str());
             }
         }
     } else {
@@ -142,8 +145,10 @@ int main(int argc, char *argv[])
 
 
 
+
     // Does the genetic algorithm for every test case in input file
     for(int case_i=0;case_i<numTestCases;case_i++) {
+
         // Get current sequence and target fitness
         string currSequence = testSequence[case_i];
         int currSize = currSequence.size();
@@ -154,8 +159,14 @@ int main(int argc, char *argv[])
         population = generateInitialPop(popNum, currSize, maxFitnessLimit);
 
 
+        // Keeps track of the number of generations, starts at 0 for easy iteration (first generation will be 1)
+        int generationNum = 0;
+
         int currentFitness = 0;
         while(currentFitness > targetFitness) {
+
+            generationNum++;
+
             // Generate the fitness rating for each member of the population
             for(int i=0;i<popNum;i++) {
                 population[i].fitness = getFitnessRating(proteinSequence, population[i].proteinDirection, maxFitnessLimit);
@@ -198,11 +209,17 @@ int main(int argc, char *argv[])
             currentFitness = nextPopulation[0].fitness;
             population = nextPopulation;
 
-            qDebug(to_string(currentFitness).c_str());
-            qDebug(population[0].proteinDirection.c_str());
+            string generation = "----- Generation: " + to_string(generationNum) + " -----";
+            string currentFitString = "Fitness:    " + to_string(currentFitness);
+            string currentDirections = "Directions: " + population[0].proteinDirection;
+
+            qDebug(generation.c_str());
+            qDebug(currentFitString.c_str());
+            qDebug(currentDirections.c_str());
+            qDebug("");
 
             // Display best fit in generation
-            QPicture pi = drawProtein(proteinSequence, proteinDirection, maxFitnessLimit, pixelSpacing);
+            QPicture pi = drawProtein(proteinSequence, population[0].proteinDirection, maxFitnessLimit, pixelSpacing);
             int fitness = population[0].fitness;
 
             string fitText = "Fitness: " + to_string(fitness);
@@ -218,10 +235,12 @@ int main(int argc, char *argv[])
             // Draw parent QLabel, containing the image and fitness sub-QLabel
             l.setPicture(pi);
             l.show();
+
+            a.processEvents();
         }
     }
 
-    return a.exec();
+    return 1;
 }
 
 
@@ -554,9 +573,12 @@ QPicture drawProtein(string proteinSequence, string proteinDirection, int maxFit
     // Get directional sequence map
     vector<vector<char>> directionalSequenceMap = getDirectionalSequenceMap(proteinSequence, proteinDirection, maxFitnessLimit);
 
+    char currentType;
+    char currentDirection;
+
     for(int i=0;i<proteinSequence.size();i++) {
-        char currentType = proteinSequence[i];
-        char currentDirection = proteinDirection[i];
+        currentType = proteinSequence[i];
+        currentDirection = proteinDirection[i];
 
 
         // First draw the line to the next destination
@@ -636,6 +658,14 @@ QPicture drawProtein(string proteinSequence, string proteinDirection, int maxFit
         currY = nextY;
 
     }
+    if(currentType == 'h') {
+        p.setPen(QPen(Qt::red, 12, Qt::SolidLine, Qt::RoundCap));
+        p.drawPoint(currX, currY);
+    } else {
+        p.setPen(QPen(Qt::black, 12, Qt::SolidLine, Qt::RoundCap));
+        p.drawPoint(currX, currY);
+    }
+
 
     p.end();
 
