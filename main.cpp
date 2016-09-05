@@ -31,9 +31,10 @@ struct ascending {
 // Constructors
 vector<proteinNode> generateInitialPop(int, int, int);
 string createRandomSequence(int, int);
-proteinNode grabParent(vector<proteinNode>, int);
+proteinNode grabParent(vector<proteinNode>, int); // For weighted selection
 proteinNode crossover(proteinNode, proteinNode, int, int);
 void displayProtein(QPicture, int);
+string mutate(string, int, int);
 
 QPicture drawProtein(string, string, int, int);
 bool collisionDetection(string, int);
@@ -50,7 +51,7 @@ int main(int argc, char *argv[])
 {
     // START: User options
 
-    //srand(time(NULL));
+    srand(time(NULL));
 
     // Change as per location. Will not read relatively to the location of the program for some reason
     string filename = "C:\\test\\Input.txt";
@@ -74,15 +75,41 @@ int main(int argc, char *argv[])
     int windowHeight = 600;
 
     // Genetic options:
-    int popNum = 100;
+    int popNum = 200;
 
     // Percentage of elite, calculated into the exact number based on popNum
     int elitePercentage = 5;
-    int numElite = (elitePercentage/100) * popNum;
+    int numElite = (elitePercentage/100.0) * popNum;
 
-    // First half will be eligible, if second half is picked it rolls again for the second half as the first half
-    // It continues trickling down until it rolls a random number in the first half
-    int percentChanceParent = 10;
+    // NOTE: Program calls for this option to be turned off
+    // More fun to visualize by choosing one of the elites to be displayed
+    // instead of just the most fit.
+    int drawRand = 0;
+
+    // From 0-x to roll when choosing candidates for crossover
+    int rangeToCrossover = popNum;
+
+    // NOTE: Controls 2 things: Number of times to attempt a crossover AND mutation before failure
+    int numToTry = 10;
+
+    // User input for percentage to mutate, calculates the number
+    int mutatePercentage = 200;
+    int numMutate = (mutatePercentage/100.0) * popNum;
+
+    // Calculates the number to crossover for a hard limit to leave room for random generations
+    int crossoverPercentage = 67;
+    int numCrossover = (crossoverPercentage/100.0) * popNum;
+
+    // APOCALYPSE Options
+    // Apocalypse clears the population if the fitness hasn't gotten better after the repeatTrigger's amount
+    int apocalypse = 1;
+    int apocRepeatTrigger = 100;
+    int apocCounter = 0;
+    int apocLastFitness;
+
+    // Keeps track of progress
+    int numCompleted = 0;
+
 
 
     // END: User options
@@ -99,7 +126,6 @@ int main(int argc, char *argv[])
 
     // Show window and loading message in console
     a.processEvents();
-    qDebug("Loading...");
 
     l.setAlignment(Qt::AlignCenter);
     l.setFixedSize(windowWidth,windowHeight);
@@ -147,16 +173,37 @@ int main(int argc, char *argv[])
 
 
     // Does the genetic algorithm for every test case in input file
-    for(int case_i=0;case_i<numTestCases;case_i++) {
+    for(int case_i=3;case_i<numTestCases;case_i++) {
 
         // Get current sequence and target fitness
-        string currSequence = testSequence[case_i];
-        int currSize = currSequence.size();
+        proteinSequence = testSequence[case_i];
+        int currSize = proteinSequence.size();
         int targetFitness = testFitness[case_i];
+
+        // Print out the test case
+        string seqOutput1 = "Sequence: " + proteinSequence;
+        string seqOutput2 = "Target Fitness: " + to_string(targetFitness);
+
+        qDebug("------- NEW SEQUENCE --------");
+        qDebug(seqOutput1.c_str());
+        qDebug(seqOutput2.c_str());
+        qDebug("-----------------------------");
+        qDebug("");
+
+        qDebug("Loading First Generation...");
+        qDebug("");
 
         // Generate initial population
         vector<proteinNode> population;
         population = generateInitialPop(popNum, currSize, maxFitnessLimit);
+
+        // Generate the fitness rating for each member of the population
+        for(int i=0;i<popNum;i++) {
+            population[i].fitness = getFitnessRating(proteinSequence, population[i].proteinDirection, maxFitnessLimit);
+        }
+
+        // Sort the vector based on the fitness rating
+        sort(population.begin(), population.end(), ascending());
 
 
         // Keeps track of the number of generations, starts at 0 for easy iteration (first generation will be 1)
@@ -167,61 +214,157 @@ int main(int argc, char *argv[])
 
             generationNum++;
 
-            // Generate the fitness rating for each member of the population
-            for(int i=0;i<popNum;i++) {
-                population[i].fitness = getFitnessRating(proteinSequence, population[i].proteinDirection, maxFitnessLimit);
-            }
-
-            // Sort the vector based on the fitness rating
-            sort(population.begin(), population.end(), ascending());
-
             // Create second population vector
             vector<proteinNode> nextPopulation;
 
-            while(nextPopulation.size() < popNum) {
-                proteinNode parent1 = grabParent(population, percentChanceParent);
-                proteinNode parent2 = grabParent(population, percentChanceParent);
+
+            // Transfer the elite population
+            for(int i=0;i<numElite;i++) {
+                nextPopulation.push_back(population[i]);
+            }
+
+
+            // While the population is less than the max size, keep crossing over
+            while(nextPopulation.size() < numCrossover) {
+                proteinNode parent1 = population[rand() % rangeToCrossover];
+                proteinNode parent2 = population[rand() % rangeToCrossover];
                 // Makes sure the second parent isn't the same
                 while(parent1.proteinDirection == parent2.proteinDirection) {
-                    parent2 = grabParent(population, percentChanceParent);
+                    parent2 = population[rand() % rangeToCrossover];
                 }
 
-                proteinNode child = crossover(parent1, parent2, percentChanceParent, maxFitnessLimit);
-                while(child.proteinDirection == "nope") {
+                // If the crossover fails...
+                proteinNode child = crossover(parent1, parent2, numToTry, maxFitnessLimit);
+                while(child.proteinDirection == "failed") {
                     // Choose new parents
-                    parent1 = grabParent(population, percentChanceParent);
-                    parent2 = grabParent(population, percentChanceParent);
+                    parent1 = population[rand() % rangeToCrossover];
+                    parent2 = population[rand() % rangeToCrossover];
                     // Make sure the second parent isn't the same
                     while(parent1.proteinDirection == parent2.proteinDirection) {
-                        parent2 = grabParent(population, percentChanceParent);
+                        parent2 = population[rand() % rangeToCrossover];
                     }
 
-                    child = crossover(parent1, parent2, percentChanceParent, maxFitnessLimit);
+                    child = crossover(parent1, parent2, numToTry, maxFitnessLimit);
                 }
 
                 nextPopulation.push_back(child);
             }
 
-            for(int i=0;i<popNum;i++) {
-                nextPopulation[i].fitness = getFitnessRating(proteinSequence, nextPopulation[i].proteinDirection, maxFitnessLimit);
+            while(nextPopulation.size() < popNum) {
+                proteinNode child;
+                child.proteinDirection = createRandomSequence(currSize, maxFitnessLimit);
+
+                nextPopulation.push_back(child);
             }
+
+
+            // Mutates non-elite population randomly
+            for(int i=0;i<numMutate;i++) {
+                // Grabs index for which non-elite to mutate and mutates it
+                //int mutateIndex = (rand() % popNum-numElite) + numElite;
+                int mutateIndex = (rand() % popNum);
+                string mutated = mutate(nextPopulation[mutateIndex].proteinDirection, numToTry, maxFitnessLimit);
+
+                // While the mutation is not valid, keep choosing a new
+                while(mutated == "failed") {
+                    mutateIndex = (rand() % popNum-numElite) + numElite;
+                    mutated = mutate(nextPopulation[mutateIndex].proteinDirection, numToTry, maxFitnessLimit);
+                }
+
+                // Will not save mutation if it is an elite and the fitness is worse, however it will switch if the fitness is equals
+                int saveMutation = 1;
+                if(mutateIndex < numElite) {
+                    int fitnessOrig = getFitnessRating(proteinSequence, nextPopulation[mutateIndex].proteinDirection, maxFitnessLimit);
+                    int fitnessMutated = getFitnessRating(proteinSequence, mutated, maxFitnessLimit);
+
+                    if(fitnessOrig > fitnessMutated) {
+                        saveMutation = 0;
+                    }
+                }
+
+                if(saveMutation == 1) {
+                    nextPopulation[mutateIndex].proteinDirection = mutated;
+                } else {
+                    i--;
+                }
+            }
+
+            // APOCALYPSE: If apocalypse is 1 and counter is over the repeat trigger limit, kill em all
+            if(apocalypse == 1 && apocCounter > apocRepeatTrigger) {
+                //proteinNode loneSurvivor = nextPopulation[0];
+
+                nextPopulation = generateInitialPop(popNum, currSize, maxFitnessLimit);
+
+                // The lone survivor evolves on...
+                //nextPopulation[0] = loneSurvivor;
+
+                // Generate the fitness rating for each member of the population
+                for(int i=0;i<popNum;i++) {
+                    nextPopulation[i].fitness = getFitnessRating(proteinSequence, population[i].proteinDirection, maxFitnessLimit);
+                }
+
+                // Sort the vector based on the fitness rating
+                sort(population.begin(), population.end(), ascending());
+
+                qDebug("---------------------- Oh no an APOCALYPSE!!! -----------------------");
+                qDebug("----All but the most fit died. The pop didn't evolve for X cycles----");
+                qDebug("------------------------ Time to rebuild... -------------------------");
+                qDebug("");
+
+                apocCounter = 0;
+            } else {
+                // Calculate the fitness levels for the nextPopulation
+                for(int i=0;i<popNum;i++) {
+                    nextPopulation[i].fitness = getFitnessRating(proteinSequence, nextPopulation[i].proteinDirection, maxFitnessLimit);
+                }
+
+                // Sort the vector based on the fitness rating
+                sort(nextPopulation.begin(), nextPopulation.end(), ascending());
+
+                if(apocLastFitness == nextPopulation[0].fitness) {
+                    apocCounter++;
+                } else {
+                    apocCounter = 0;
+                    apocLastFitness = nextPopulation[0].fitness;
+                }
+            }
+
+
 
             currentFitness = nextPopulation[0].fitness;
             population = nextPopulation;
 
-            string generation = "----- Generation: " + to_string(generationNum) + " -----";
+            // Display stats in console
+            string generation = "----- Generation: " + to_string(generationNum) + " T:" + to_string(targetFitness) + " -----";
             string currentFitString = "Fitness:    " + to_string(currentFitness);
             string currentDirections = "Directions: " + population[0].proteinDirection;
+            string currentFinished = "--------- (finished: " + to_string(numCompleted) + ") ---------";
 
             qDebug(generation.c_str());
             qDebug(currentFitString.c_str());
             qDebug(currentDirections.c_str());
+
+            qDebug(currentFinished.c_str());
             qDebug("");
 
-            // Display best fit in generation
-            QPicture pi = drawProtein(proteinSequence, population[0].proteinDirection, maxFitnessLimit, pixelSpacing);
-            int fitness = population[0].fitness;
+            // Display image of best fit in generation
 
+            QPicture pi;
+
+            // Create scalable image of projected protein
+            // If drawRand == 1, draw a random protein from the population
+            int fitness;
+            if(drawRand == 1) {
+                int randIndex = rand() % (popNum/5);
+                pi = drawProtein(proteinSequence, population[randIndex].proteinDirection, maxFitnessLimit, pixelSpacing);
+                fitness = population[randIndex].fitness;
+            } else {
+                pi = drawProtein(proteinSequence, population[0].proteinDirection, maxFitnessLimit, pixelSpacing);
+                fitness = population[0].fitness;
+            }
+
+
+            // Create the fitness sublabel
             string fitText = "Fitness: " + to_string(fitness);
 
             // Setup child label for displaying the fitness level
@@ -231,17 +374,95 @@ int main(int argc, char *argv[])
             r.setFont(f);
             r.setAlignment(Qt::AlignTop);
             r.setText(QString::fromStdString(fitText));
+            r.show();
 
             // Draw parent QLabel, containing the image and fitness sub-QLabel
             l.setPicture(pi);
             l.show();
 
+            // Update window by displaying new drawing
             a.processEvents();
         }
     }
 
     return 1;
 }
+
+
+// Tries numToTry times to mutate a random index of the proteinDirection string
+string mutate(string proteinDirection, int numToTry, int maxFitnessLimit) {
+
+    for(int i=0;i<numToTry;i++) {
+        // Reset string, generate random index
+        string testProteinDir = proteinDirection;
+        int randomIndex = rand() % (proteinDirection.size() - 1);
+        char charAtIndex = testProteinDir[randomIndex];
+
+        char randomDir = '0' + ((rand() % 4) + 1);
+
+        // Make sure the direction is not the same
+        while(testProteinDir[randomIndex] == randomDir) {
+            randomDir = '0' + ((rand() % 4) + 1);
+        }
+
+        // Calculate offset between original and new directions
+        int offset = abs((int)randomDir - (int)testProteinDir[randomIndex]);
+        // Generate twistDirection for mutation twist, and sweep direction for direction of sweep
+        // For both, 0 is left and 1 is right
+        int twistDirection = rand() % 2;
+        int sweepDirection = rand() % 2;
+
+        // Do loop to perform mutation of each index after or before the
+        if(sweepDirection == 0) {
+            // Go to the left
+            for(int i=randomIndex;i>=0;i--) {
+                if(twistDirection == 0) {
+                    // Calculate new dir and make sure it is valid
+                    int newDir = (int)testProteinDir[i] - offset;
+                    if(newDir < 1) {
+                        newDir += 4;
+                    }
+                    testProteinDir[i] = '0' + newDir;
+                } else {
+                    int newDir = (int)testProteinDir[i] + offset;
+                    if(newDir > 4) {
+                        newDir -= 4;
+                    }
+                    testProteinDir[i] = '0' + newDir;
+                }
+            }
+        } else {
+            // Go to the right
+            // Note, does not check last index (should remain 0)
+            for(int i=randomIndex;i<proteinDirection.size()-1;i++) {
+                if(!testProteinDir[i] == '0') {
+                    if(twistDirection == 0) {
+                        // Calculate new dir and make sure it is valid
+                        int newDir = (int)testProteinDir[i] - offset;
+                        if(newDir < 1) {
+                            newDir += 4;
+                        }
+                        testProteinDir[i] = '0' + newDir;
+                    } else {
+                        int newDir = (int)testProteinDir[i] + offset;
+                        if(newDir > 4) {
+                            newDir -= 4;
+                        }
+                        testProteinDir[i] = '0' + newDir;
+                    }
+                }
+            }
+        }
+
+        // If the mutation is successful, return it
+        if(!collisionDetection(testProteinDir, maxFitnessLimit)) {
+            return testProteinDir;
+        }
+    }
+    // If the numToTry runs out, return failed
+    return "failed";
+}
+
 
 
 
@@ -281,24 +502,83 @@ proteinNode grabParent(vector<proteinNode> population, int percentChanceParent) 
 }
 
 
-// Crosses 2 proteins over, if they can be crossed. Otherwise, returns "nope" in the proteinDirection
+// Crosses 2 proteins over, if they can be crossed. Otherwise, returns "failed" in the proteinDirection
 proteinNode crossover(proteinNode parent1, proteinNode parent2, int numToTry, int maxFitnessLimit) {
     int sizeParents = parent1.proteinDirection.size();
+
+    proteinNode parent1Mod;
+    proteinNode parent2Mod;
+
     proteinNode child;
 
+    // Loops for number of attempts allowed with these 2 proteinNodes
     for(int i=0;i<numToTry;i++) {
+        parent1Mod = parent1;
+        parent2Mod = parent2;
+
+        // Index to start at, direction to go in string, direction to twist when rotate checking
         int randomIndex = rand() % sizeParents;
+        int sweepDirection = rand() % 2;
+        int twistDirection = rand() % 2;
 
-        for(int i=randomIndex;i<sizeParents;i++) {
-            parent1.proteinDirection[i] = parent2.proteinDirection[i];
-        }
+        if(sweepDirection == 0) {
+            for(int j=0;j<4;j++) {
+                for(int k=randomIndex;k>=0;k--) {
+                    // Modify the value based on the random twistDirection chosen
+                    int tempDirection;
+                    if(twistDirection == 1) {
+                        tempDirection = (int)(parent2Mod.proteinDirection[k]) + j - 48;
+                    } else {
+                        tempDirection = (int)(parent2Mod.proteinDirection[k]) - j - 48;
+                    }
 
-        if(!collisionDetection(parent1.proteinDirection, maxFitnessLimit)) {
-            return parent1;
+                    // Account for numbers outside the range
+                    if (tempDirection > 4) {
+                        tempDirection -= 4;
+                    } else if (tempDirection < 1) {
+                        tempDirection += 4;
+                    }
+
+                    parent1Mod.proteinDirection[k] = '0' + tempDirection;
+                }
+
+                if(!collisionDetection(parent1Mod.proteinDirection, maxFitnessLimit)) {
+                    return parent1Mod;
+                }
+
+                parent1Mod = parent1;
+                parent2Mod = parent2;
+            }
+        } else {
+            for(int j=0;j<4;j++) {
+                for(int k=randomIndex;k<sizeParents - 1;k++) {
+                    int tempDirection;
+                    if(twistDirection == 1) {
+                        tempDirection = (int)(parent2Mod.proteinDirection[k]) + j - 48;
+                    } else {
+                        tempDirection = (int)(parent2Mod.proteinDirection[k]) - j - 48;
+                    }
+
+                    if (tempDirection > 4) {
+                        tempDirection -= 4;
+                    } else if (tempDirection < 1) {
+                        tempDirection += 4;
+                    }
+
+                    parent1Mod.proteinDirection[k] = '0' + tempDirection;
+                }
+
+                if(!collisionDetection(parent1Mod.proteinDirection, maxFitnessLimit)) {
+                    return parent1Mod;
+                }
+
+                parent1Mod = parent1;
+                parent2Mod = parent2;
+            }
         }
     }
 
-    child.proteinDirection = "nope";
+    child.proteinDirection = "failed";
     return child;
 }
 
@@ -576,7 +856,7 @@ QPicture drawProtein(string proteinSequence, string proteinDirection, int maxFit
     char currentType;
     char currentDirection;
 
-    for(int i=0;i<proteinSequence.size();i++) {
+    for(int i=0;i<proteinSequence.size() - 1;i++) {
         currentType = proteinSequence[i];
         currentDirection = proteinDirection[i];
 
@@ -658,6 +938,25 @@ QPicture drawProtein(string proteinSequence, string proteinDirection, int maxFit
         currY = nextY;
 
     }
+
+
+    // Do iteration of dotted line and dot drawing for the last point
+    p.setPen(QPen(Qt::black, 1, Qt::DotLine, Qt::FlatCap, Qt::BevelJoin));
+    if(currentType == 'h') {
+        if(directionalSequenceMap[currXmap][currYmap-1] == 'h' && collisionTestMap[currXmap][currYmap-1] != 1) {
+            p.drawLine(currX, currY, currX, currY-pixelSpacing);
+        }
+        if(directionalSequenceMap[currXmap+1][currYmap] == 'h' && collisionTestMap[currXmap+1][currYmap] != 1) {
+            p.drawLine(currX, currY, currX+pixelSpacing, currY);
+        }
+        if(directionalSequenceMap[currXmap][currYmap+1] == 'h' && collisionTestMap[currXmap][currYmap+1] != 1) {
+            p.drawLine(currX, currY, currX, currY+pixelSpacing);
+        }
+        if(directionalSequenceMap[currXmap-1][currYmap] == 'h' && collisionTestMap[currXmap-1][currYmap] != 1) {
+            p.drawLine(currX, currY, currX-pixelSpacing, currY);
+        }
+    }
+
     if(currentType == 'h') {
         p.setPen(QPen(Qt::red, 12, Qt::SolidLine, Qt::RoundCap));
         p.drawPoint(currX, currY);
