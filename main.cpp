@@ -2,10 +2,12 @@
 #include <QLabel>
 #include <QPicture>
 #include <QPainter>
+#include <QDir>
 
 #include <fstream>
 #include <string>
 #include <sstream>
+#include <unordered_map>
 
 #include <QtDebug>
 #include <time.h>
@@ -29,17 +31,18 @@ struct ascending {
 
 
 // Constructors
-vector<proteinNode> generateInitialPop(int, int, int);
-string createRandomSequence(int, int);
-proteinNode grabParent(vector<proteinNode>, int); // For weighted selection
-proteinNode crossover(proteinNode, proteinNode, int, int);
-void displayProtein(QPicture, int);
 string mutate(string, int, int);
+vector<proteinNode> generateInitialPop(int, int, int);
+proteinNode grabParent(vector<proteinNode>, int); // For weighted selection
+proteinNode crossover(proteinNode, proteinNode, int, int, string);
+string createRandomSequence(int, int);
+int getFitnessRating(string, string, int);
+
+vector<vector<char>> getDirectionalSequenceMap(string, string, int);
+bool collisionDetection(string, int);
 
 QPicture drawProtein(string, string, int, int);
-bool collisionDetection(string, int);
-vector<vector<char>> getDirectionalSequenceMap(string, string, int);
-int getFitnessRating(string, string, int);
+
 vector<string> split(string, char);
 
 
@@ -49,16 +52,20 @@ vector<string> split(string, char);
 
 int main(int argc, char *argv[])
 {
+
     // START: User options
 
     srand(time(NULL));
 
+    // Contains all the user-modifiable options for the algorithm
+    string optionsFilename = "Options.txt";
+
     // Change as per location. Will not read relatively to the location of the program for some reason
-    string filename = "C:\\test\\Input.txt";
+    string filename = "Input.txt";
 
     // Fitness level can be from zero to 1024
     // Max fitness level from input file
-    const int maxFitnessLimit = 1024;
+    int maxFitnessLimit = 1024;
 
     // proteinSequence = h=Hydrophobic(special/red) p=Hydrophilic(black)
     string proteinSequence  = "hphpphhphpphphhpphph";
@@ -78,13 +85,15 @@ int main(int argc, char *argv[])
     int popNum = 200;
 
     // Percentage of elite, calculated into the exact number based on popNum
-    int elitePercentage = 3;
+    int elitePercentage = 5;
     int numElite = (elitePercentage/100.0) * popNum;
 
     // NOTE: Program calls for this option to be turned off
     // More fun to visualize by choosing one of the elites to be displayed
     // instead of just the most fit.
-    int drawRand = 1;
+    int drawRand = 0;
+    // Draws one of the top X percentage randomly after each generation (more fun to look at)
+    int drawPercentage = 10;
 
     // NOTE: Controls 2 things: Number of times to attempt a crossover AND mutation before failure
     int numToTry = 5;
@@ -94,23 +103,26 @@ int main(int argc, char *argv[])
     int numMutate = (mutatePercentage/100.0) * popNum;
 
     // Calculates the number to crossover for a hard limit to leave room for random generations
-    int crossoverPercentage = 60;
+    int crossoverPercentage = 70;
     int numCrossover = (crossoverPercentage/100.0) * popNum;
 
     // APOCALYPSE Options
     // Apocalypse clears the population if the fitness hasn't gotten better after the repeatTrigger's amount
-    int apocalypse = 1;
+    int apocalypse = 0;
     int apocRepeatTrigger = 200;
     int apocCounter = 0;
     int numApoc = 0;
+    int numSurvivors = 0;
     int apocLastFitness;
 
     // Keeps track of progress
     int numCompleted = 0;
 
-
+    // Deduplication on the population is done every x generations
+    int checkForDupeInterval = 500;
 
     // END: User options
+
 
 
     // Each index matches each other for simplicity
@@ -122,17 +134,70 @@ int main(int argc, char *argv[])
     QApplication a(argc, argv);
     QLabel l;
 
-    // Show window and loading message in console
-    a.processEvents();
-
     l.setAlignment(Qt::AlignCenter);
     l.setFixedSize(windowWidth,windowHeight);
+
+    // Show window and loading message in console
+    string loadText = "Loading...";
+
+    // Setup child label for displaying the fitness level
+    QLabel x(&l);
+    QFont f("Arial", 16, QFont::Bold);
+    x.setMargin(10);
+    x.setFont(f);
+    x.setAlignment(Qt::AlignTop);
+    x.setText(QString::fromStdString(loadText));
+    x.show();
+
+    // Draw parent QLabel, containing the image and fitness sub-QLabel
+    l.show();
+    // Update window
+    a.processEvents();
+
+    // Otherwise the Loading... message will not go away
+    x.hide();
+
+
+    // Setup options input file
+    ifstream optionsFile;
+    optionsFile.open(optionsFilename.c_str());
+    string lineInput;
+
+    // Read file line by line and parse it as it is read
+    if(optionsFile.is_open()) {
+        // Read in a line and save the variable's value accordingly
+        while(getline(optionsFile,lineInput)) {
+            vector<string> splitString = split(lineInput, ' ');
+
+            if (splitString[0] == "maxFitnessLimit") {
+                maxFitnessLimit = stoi(splitString[2]);
+            } else if (splitString[0] == "popNum") {
+                popNum = stoi(splitString[2]);
+                numElite = (elitePercentage/100.0) * popNum;
+                numMutate = (mutatePercentage/100.0) * popNum;
+                numCrossover = (crossoverPercentage/100.0) * popNum;
+            } else if (splitString[0] == "elitePercentage") {
+                elitePercentage = stoi(splitString[2]);
+                numElite = (elitePercentage/100.0) * popNum;
+            } else if (splitString[0] == "mutatePercentage") {
+                mutatePercentage = stoi(splitString[2]);
+                numMutate = (mutatePercentage/100.0) * popNum;
+            } else if (splitString[0] == "crossoverPercentage") {
+                crossoverPercentage = stoi(splitString[2]);
+                numCrossover = (crossoverPercentage/100.0) * popNum;
+            }
+        }
+    } else {
+        string error = "Error opening file: " + optionsFilename + "\n" + "ERROR: " + strerror(errno);
+        qDebug(error.c_str());
+        qDebug("Using default values...");
+    }
+    optionsFile.close();
 
 
     // Setup input file stream
     ifstream readFile;
     readFile.open(filename.c_str());
-    string lineInput;
 
     int numTestCases;
 
@@ -150,14 +215,12 @@ int main(int argc, char *argv[])
             splitString = split(lineInput, ' ');
             if(splitString[0] == "Seq") {
                 testSequence.push_back(splitString[2]);
-                //qDebug(splitString[2].c_str());
             }
 
             getline(readFile, lineInput);
             splitString = split(lineInput, ' ');
             if(splitString[0] == "Fitness") {
                 testFitness.push_back(stoi(splitString[2]));
-                //qDebug(splitString[2].c_str());
             }
         }
     } else {
@@ -165,8 +228,7 @@ int main(int argc, char *argv[])
         qDebug(error.c_str());
         return 1;
     }
-
-
+    readFile.close();
 
 
 
@@ -178,6 +240,13 @@ int main(int argc, char *argv[])
         proteinSequence = testSequence[case_i];
         int currSize = proteinSequence.size();
         int targetFitness = testFitness[case_i];
+        // If the targetFitness is 0 or higher, it will run infinitely
+        if(targetFitness >= 0) {
+            targetFitness = INT_MIN;
+        }
+
+        // Adjust apocRepeatTimer based on size of input (-10 == x1.0, -14 == x1.4 etc)
+        int apocRepeatTriggerAdj = apocRepeatTrigger * (abs(targetFitness) * 0.1);
 
         // Print out the test case
         string seqOutput1 = "Sequence: " + proteinSequence;
@@ -233,7 +302,7 @@ int main(int argc, char *argv[])
                 }
 
                 // If the crossover fails...
-                proteinNode child = crossover(parent1, parent2, numToTry, maxFitnessLimit);
+                proteinNode child = crossover(parent1, parent2, numToTry, maxFitnessLimit, proteinSequence);
                 while(child.proteinDirection == "failed") {
                     // Choose new parents
                     parent1 = grabParent(population, numElite);
@@ -243,7 +312,7 @@ int main(int argc, char *argv[])
                         parent2 = grabParent(population, numElite);
                     }
 
-                    child = crossover(parent1, parent2, numToTry, maxFitnessLimit);
+                    child = crossover(parent1, parent2, numToTry, maxFitnessLimit, proteinSequence);
                 }
 
                 nextPopulation.push_back(child);
@@ -276,9 +345,9 @@ int main(int argc, char *argv[])
 
                 // Will not save mutation if it is an elite and the fitness is worse, however it will switch if the fitness is equal
                 int saveMutation = 1;
+                int fitnessMutated = getFitnessRating(proteinSequence, mutated, maxFitnessLimit);
                 if(mutateIndex < numElite) {
                     int fitnessOrig = getFitnessRating(proteinSequence, nextPopulation[mutateIndex].proteinDirection, maxFitnessLimit);
-                    int fitnessMutated = getFitnessRating(proteinSequence, mutated, maxFitnessLimit);
 
                     if(fitnessOrig > fitnessMutated) {
                         saveMutation = 0;
@@ -287,13 +356,14 @@ int main(int argc, char *argv[])
 
                 if(saveMutation == 1) {
                     nextPopulation[mutateIndex].proteinDirection = mutated;
+                    nextPopulation[mutateIndex].fitness = fitnessMutated;
                 } else {
                     i--;
                 }
             }
 
             // APOCALYPSE: If apocalypse is 1 and counter is over the repeat trigger limit, kill em all
-            if(apocalypse == 1 && apocCounter > apocRepeatTrigger) {
+            if(apocalypse == 1 && apocCounter > apocRepeatTriggerAdj) {
                 proteinNode loneSurvivor = nextPopulation[0];
 
                 nextPopulation = generateInitialPop(popNum, currSize, maxFitnessLimit);
@@ -317,6 +387,8 @@ int main(int argc, char *argv[])
                     nextPopulation[0] = loneSurvivor;
                     qDebug(" !!! There was a lone survivor !!! ");
                     qDebug("");
+
+                    numSurvivors++;
                 }
 
                 apocCounter = 0;
@@ -325,6 +397,46 @@ int main(int argc, char *argv[])
                 // Calculate the fitness levels for the nextPopulation
                 for(int i=0;i<popNum;i++) {
                     nextPopulation[i].fitness = getFitnessRating(proteinSequence, nextPopulation[i].proteinDirection, maxFitnessLimit);
+                }
+
+                // Check for duplicates. Replace with a crossover if it is a duplicate (Ensures duplicate elites don't stack)
+                // Done every 50 generations to allow for brief stacking (for higher selection possibility of fit individuals)
+                if(generationNum % checkForDupeInterval == 0) {
+                    unordered_map<string, int> duplicateCheck;
+                    int numDuplicates = 0;
+                    for(int i=0;i<popNum;i++) {
+                        if(duplicateCheck[nextPopulation[i].proteinDirection] == 1) {
+                            proteinNode parent1 = grabParent(nextPopulation, numElite);
+                            proteinNode parent2 = grabParent(nextPopulation, numElite);
+                            // Makes sure the second parent isn't the same
+                            while(parent1.proteinDirection == parent2.proteinDirection) {
+                                parent2 = grabParent(nextPopulation, numElite);
+                            }
+
+                            // If the crossover fails...
+                            proteinNode child = crossover(parent1, parent2, numToTry, maxFitnessLimit, proteinSequence);
+                            while(child.proteinDirection == "failed") {
+                                // Choose new parents
+                                parent1 = grabParent(nextPopulation, numElite);
+                                parent2 = grabParent(nextPopulation, numElite);
+                                // Make sure the second parent isn't the same
+                                while(parent1.proteinDirection == parent2.proteinDirection) {
+                                    parent2 = grabParent(nextPopulation, numElite);
+                                }
+
+                                child = crossover(parent1, parent2, numToTry, maxFitnessLimit, proteinSequence);
+                            }
+
+                            nextPopulation[i] = child;
+                            numDuplicates++;
+                        } else {
+                            duplicateCheck[nextPopulation[i].proteinDirection] = 1;
+                        }
+                    }
+
+                    string duplicateText = " !!! Number of Duplicates Removed: " + to_string(numDuplicates) + " !!! ";
+                    qDebug(duplicateText.c_str());
+                    qDebug("");
                 }
 
                 // Sort the vector based on the fitness rating
@@ -336,39 +448,43 @@ int main(int argc, char *argv[])
                     apocCounter = 0;
                     apocLastFitness = nextPopulation[0].fitness;
                 }
+
+                currentFitness = nextPopulation[0].fitness;
+                population = nextPopulation;
+
+                if(currentFitness < topFitness) {
+                    topFitness = currentFitness;
+                }
+
+                // Display stats in console
+                string generation = "-------------- Generation: " + to_string(generationNum) + " --------------";
+                string currentFitString = "Fitness:    " + to_string(currentFitness) + " / " + to_string(targetFitness) + "   TopFit: " + to_string(topFitness);
+                string currentDirections = "Directions: " + population[0].proteinDirection;
+                string currentSequence = "Sequence:   " + proteinSequence;
+                string currentFinished = "------ (Done: " + to_string(numCompleted) + "  Apoc: " + to_string(numApoc) + "  Survivors: " + to_string(numSurvivors) + ") ------";
+
+                qDebug(generation.c_str());
+                qDebug(currentFitString.c_str());
+                qDebug(currentDirections.c_str());
+                qDebug(currentSequence.c_str());
+                qDebug(currentFinished.c_str());
+
+                qDebug("");
             }
 
 
 
-            currentFitness = nextPopulation[0].fitness;
-            population = nextPopulation;
 
-            if(currentFitness < topFitness) {
-                topFitness = currentFitness;
-            }
-
-            // Display stats in console
-            string generation = "-------------- Generation: " + to_string(generationNum) + " --------------";
-            string currentFitString = "Fitness:    " + to_string(currentFitness) + "   Target: " + to_string(targetFitness);
-            string currentDirections = "Directions: " + population[0].proteinDirection;
-            string currentFinished = "-------- (Done: " + to_string(numCompleted) + "  Apoc: " + to_string(numApoc) + "  TFit: " + to_string(topFitness) + ") --------";
-
-            qDebug(generation.c_str());
-            qDebug(currentFitString.c_str());
-            qDebug(currentDirections.c_str());
-            qDebug(currentFinished.c_str());
-
-            qDebug("");
 
             // Display image of best fit in generation
 
             QPicture pi;
 
             // Create scalable image of projected protein
-            // If drawRand == 1, draw a random protein from the population
+            // If drawRand == 1, draw a protein from the population
             int fitness;
             if(drawRand == 1) {
-                int randIndex = rand() % (popNum/5);
+                int randIndex = rand() % (int)(popNum * (drawPercentage/100.0));
                 pi = drawProtein(proteinSequence, population[randIndex].proteinDirection, maxFitnessLimit, pixelSpacing);
                 fitness = population[randIndex].fitness;
             } else {
@@ -396,6 +512,7 @@ int main(int argc, char *argv[])
             // Update window by displaying new drawing
             a.processEvents();
         }
+        numSurvivors = 0;
         topFitness = 0;
         numApoc = 0;
         numCompleted++;
@@ -409,7 +526,7 @@ int main(int argc, char *argv[])
         qDebug("");
         qDebug("---------------------- Pinnacle Evolution: Achieved -----------------------");
         qDebug("-------------- We have surpassed all that can be surpassed.  --------------");
-        qDebug("--------------- Time to use our gifts to create new life... ---------------");
+        qDebug("----------------- Time to create new life from scratch... -----------------");
         qDebug("");
         qDebug("");
         qDebug("");
@@ -534,7 +651,7 @@ proteinNode grabParent(vector<proteinNode> population, int numElite) {
 
 
 // Crosses 2 proteins over, if they can be crossed. Otherwise, returns "failed" in the proteinDirection
-proteinNode crossover(proteinNode parent1, proteinNode parent2, int numToTry, int maxFitnessLimit) {
+proteinNode crossover(proteinNode parent1, proteinNode parent2, int numToTry, int maxFitnessLimit, string proteinSequence) {
     int sizeParents = parent1.proteinDirection.size();
 
     proteinNode parent1Mod;
@@ -613,6 +730,7 @@ proteinNode crossover(proteinNode parent1, proteinNode parent2, int numToTry, in
                 }
 
                 if(!collisionDetection(parent1Mod.proteinDirection, maxFitnessLimit)) {
+                    parent1Mod.fitness = getFitnessRating(proteinSequence, parent1Mod.proteinDirection, maxFitnessLimit);
                     return parent1Mod;
                 }
 
@@ -623,6 +741,7 @@ proteinNode crossover(proteinNode parent1, proteinNode parent2, int numToTry, in
     }
 
     child.proteinDirection = "failed";
+    child.fitness = 0;
     return child;
 }
 
@@ -656,10 +775,9 @@ string createRandomSequence(int length, int maxFitnessLimit) {
         // Mark starting point
         collisionTestMap[currX][currY] = 1;
 
-
         for(int i=0;i<length;i++) {
             int currentDirection;
-            //qDebug(to_string(i).c_str());
+
             // Check if last, if so use a 0 instead of 1-4
             if(i == length-1) {
                 randomSequence.append(to_string(0));
@@ -1017,9 +1135,6 @@ QPicture drawProtein(string proteinSequence, string proteinDirection, int maxFit
 
 
 
-
-
-
 // HELPER FUNCTIONS
 
 // Splits a string by delimiter
@@ -1034,5 +1149,3 @@ vector<string> split(string str, char delimiter) {
 
     return strings;
 }
-
-

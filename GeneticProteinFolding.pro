@@ -8,7 +8,7 @@ QT       += core gui
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
-TARGET = DrawTest
+TARGET = GeneticProteinFolding
 TEMPLATE = app
 
 
@@ -20,7 +20,6 @@ HEADERS  += mainwindow.h
 FORMS    += mainwindow.ui
 
 DISTFILES += \
-    D:/Drive/SCHOOL/2 -Pattern Recognition/Project 1/Input.txt
 
 
 # My Settings
